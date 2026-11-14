@@ -23,3 +23,6 @@ __pycache__/
 *.log
 .env
 .env.*
+
+# local-only bootstrap (downloaded Qt runtime/lib debs and fonts)
+.bootstrap/

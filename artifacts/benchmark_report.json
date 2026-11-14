@@ -1,0 +1,238 @@
+[
+  {
+    "benchmark": "thin_wall",
+    "notes": "两层闭合薄壁，净间距小于常见焊接阈值；焊接必须保持 2 个组件",
+    "detected": {},
+    "checks": {
+      "near_coincident_reported": true,
+      "cross_wall_weld_refused": true,
+      "mesh_unchanged_after_refusal": true,
+      "components_before": 2,
+      "components_after": 2,
+      "walls_not_fused": true
+    },
+    "geometry": {
+      "area_before": 6720.0,
+      "area_after": 6720.0,
+      "area_delta": 0.0,
+      "volume_before": 3200.0,
+      "volume_after": 3200.0,
+      "volume_delta": 0.0,
+      "bbox_before": [
+        40.0,
+        40.0,
+        2.4
+      ],
+      "bbox_after": [
+        40.0,
+        40.0,
+        2.4
+      ],
+      "bbox_delta": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "diagonal_before": 56.61943129350559,
+      "diagonal_after": 56.61943129350559
+    },
+    "problems": [],
+    "ok": true
+  },
+  {
+    "benchmark": "duplicate_faces",
+    "notes": "两个同向重复面 + 一个反向重复面",
+    "detected": {
+      "duplicate_faces": 3,
+      "nonmanifold_edges": 8,
+      "nonmanifold_vertices": 7
+    },
+    "checks": {
+      "duplicates_detected": true,
+      "duplicates_resolved": true,
+      "nonmanifold_from_dupes_resolved": true,
+      "history_recorded": true
+    },
+    "geometry": {
+      "area_before": 3100.0,
+      "area_after": 2200.0,
+      "area_delta": -900.0,
+      "volume_before": 5000.0,
+      "volume_after": 6000.0,
+      "volume_delta": 1000.0,
+      "bbox_before": [
+        20.0,
+        30.0,
+        10.0
+      ],
+      "bbox_after": [
+        20.0,
+        30.0,
+        10.0
+      ],
+      "bbox_delta": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "diagonal_before": 37.416573867739416,
+      "diagonal_after": 37.416573867739416
+    },
+    "problems": [],
+    "ok": true
+  },
+  {
+    "benchmark": "holed_plate",
+    "notes": "小孔可补；大开口为设计窗，默认补洞限制应拒绝",
+    "detected": {
+      "open_boundaries": 3
+    },
+    "opening_perimeters": [
+      8.0,
+      48.0,
+      48.0
+    ],
+    "checks": {
+      "two_openings_detected": true,
+      "only_small_opening_allowed": true,
+      "large_opening_refused": true,
+      "boundary_edges_reduced": true,
+      "designed_opening_remains": true,
+      "fill_recorded_params": true
+    },
+    "geometry": {
+      "area_before": 7868.0,
+      "area_after": 7872.0,
+      "area_delta": 4.0,
+      "volume_before": 14202.666666666666,
+      "volume_after": 14208.0,
+      "volume_delta": 5.33333333333394,
+      "bbox_before": [
+        60.0,
+        60.0,
+        4.0
+      ],
+      "bbox_after": [
+        60.0,
+        60.0,
+        4.0
+      ],
+      "bbox_delta": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "diagonal_before": 84.94704232638121,
+      "diagonal_after": 84.94704232638121
+    },
+    "problems": [
+      "open_boundaries: 仍有 2 个缺陷实例未解决"
+    ],
+    "ok": true
+  },
+  {
+    "benchmark": "mixed_orientation",
+    "notes": "正常朝外封闭盒 + 整体朝内封闭盒；后者需人工确认后才翻转",
+    "detected": {
+      "inward_components": 1
+    },
+    "checks": {
+      "inward_detected": true,
+      "inward_resolved": true,
+      "volume_increased": true,
+      "other_components_untouched": true
+    },
+    "geometry": {
+      "area_before": 3000.0,
+      "area_after": 3000.0,
+      "area_delta": 0.0,
+      "volume_before": 7000.0,
+      "volume_after": 9000.0,
+      "volume_delta": 2000.0,
+      "bbox_before": [
+        50.0,
+        20.0,
+        20.0
+      ],
+      "bbox_after": [
+        50.0,
+        20.0,
+        20.0
+      ],
+      "bbox_delta": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "diagonal_before": 57.445626465380286,
+      "diagonal_after": 57.445626465380286
+    },
+    "problems": [],
+    "ok": true
+  },
+  {
+    "benchmark": "open_shell",
+    "notes": "缺顶面的盒子：方向不可由体积判断，必须标记待确认",
+    "detected": {
+      "open_boundaries": 1
+    },
+    "checks": {
+      "boundary_detected": true,
+      "orientation_unconfirmed": true,
+      "not_auto_filled": true
+    },
+    "warnings": [
+      "组件 0 不封闭（10 面），无法用体积符号可靠判断内外方向，已标记为待确认"
+    ],
+    "geometry": {},
+    "problems": [
+      "组件 0 不封闭（10 面），无法用体积符号可靠判断内外方向，已标记为待确认"
+    ],
+    "ok": true
+  },
+  {
+    "benchmark": "combined_stress",
+    "notes": "综合压力样本：薄壁 + 重复面 + 反向面 + 整体朝内组件",
+    "detected": {
+      "duplicate_faces": 2,
+      "nonmanifold_edges": 5,
+      "nonmanifold_vertices": 4,
+      "inward_components": 1
+    },
+    "after": {},
+    "checks": {
+      "duplicates_resolved": true,
+      "winding_resolved": true,
+      "inward_resolved": true,
+      "components_preserved": true,
+      "clean": true
+    },
+    "geometry": {
+      "area_before": 4580.0,
+      "area_after": 4324.0,
+      "area_delta": -256.0,
+      "volume_before": 2298.0,
+      "volume_after": 4298.0,
+      "volume_delta": 2000.0,
+      "bbox_before": [
+        210.0,
+        25.0,
+        10.0
+      ],
+      "bbox_after": [
+        210.0,
+        25.0,
+        10.0
+      ],
+      "bbox_delta": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "diagonal_before": 211.7191535974013,
+      "diagonal_after": 211.7191535974013
+    },
+    "problems": [],
+    "ok": true
+  }
+]
