@@ -200,12 +200,16 @@
       "inward_components": 1
     },
     "after": {},
+    "junction_split_records": 0,
     "checks": {
       "duplicates_resolved": true,
       "winding_resolved": true,
       "inward_resolved": true,
+      "nonmanifold_resolved": true,
+      "faces_preserved": true,
       "components_preserved": true,
-      "clean": true
+      "clean": true,
+      "undo_restores_original": true
     },
     "geometry": {
       "area_before": 4580.0,

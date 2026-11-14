@@ -495,3 +495,309 @@ def _degenerate_after_weld(faces: np.ndarray) -> list[int]:
         | (faces[:, 0] == faces[:, 2])
     )
     return [int(i) for i in np.nonzero(bad)[0]]
+
+
+# ---------------------------------------------------------------------------
+# Non-manifold junction splitting
+# ---------------------------------------------------------------------------
+
+
+def _half_edge_sign(faces: np.ndarray, face_id: int, u: int, v: int) -> int:
+    """+1 when the face traverses the edge u->v, -1 when v->u, 0 if absent."""
+    tri = faces[face_id]
+    for k in range(3):
+        a, b = int(tri[k]), int(tri[(k + 1) % 3])
+        if (a, b) == (u, v):
+            return 1
+        if (a, b) == (v, u):
+            return -1
+    return 0
+
+
+def _plan_junction_split(
+    faces: np.ndarray, incident: list[int], u: int, v: int
+) -> tuple[list[int], list[int]]:
+    """Split an edge with >=3 incident faces into manifold sheets.
+
+    A manifold edge carries exactly two faces traversing it in opposite
+    directions.  One such opposite pair is allowed to keep the original
+    edge; every other incident face gets its own copies of ``u`` and ``v``
+    so the edge is no longer shared.  If no opposite pair exists, the first
+    face keeps the original edge and the rest are detached.
+
+    Returns (faces_kept_on_original_edge, faces_detached).
+    """
+    signs = [(f, _half_edge_sign(faces, f, u, v)) for f in sorted(set(incident))]
+    pos = [f for f, s in signs if s > 0]
+    neg = [f for f, s in signs if s < 0]
+    kept: list[int] = []
+    if pos and neg:
+        kept = [pos[0], neg[0]]
+    elif signs:
+        kept = [signs[0][0]]
+    detached = [f for f, _s in signs if f not in set(kept)]
+    return kept, detached
+
+
+def split_nonmanifold_edge(
+    session: RepairSession,
+    u: int,
+    v: int,
+    *,
+    reason: str = "",
+    confirm_reason: str = "",
+) -> EditRecord:
+    """Detach the extra faces of an edge shared by >=3 faces.
+
+    This is the only repair that touches non-manifold connectivity, and it
+    is deliberately *non-destructive*: every triangle is kept and no
+    coordinate changes.  The extra faces receive duplicate copies of the
+    two endpoints, which converts the junction into ordinary boundary
+    edges that can be patched later.  The caller must name the edge; this
+    operation is never inferred from proximity.
+    """
+    from .topology import build_edge_incidence
+
+    mesh = session.mesh
+    inc = build_edge_incidence(mesh.faces)
+    key = (min(int(u), int(v)), max(int(u), int(v)))
+    hits = [
+        int(eid) for eid in range(len(inc.keys))
+        if (int(inc.endpoints[eid, 0]), int(inc.endpoints[eid, 1])) == key
+    ]
+    if not hits:
+        raise RepairError(f"边 ({key[0]}, {key[1]}) 不存在")
+    eid = hits[0]
+    incident = sorted(set(int(f) for f in inc.faces[eid]))
+    if len(incident) < 3:
+        raise RepairError(
+            f"边 ({key[0]}, {key[1]}) 只有 {len(incident)} 个面，不是非流形边"
+        )
+
+    kept, detached = _plan_junction_split(mesh.faces, incident, key[0], key[1])
+    if not detached:
+        raise RepairError("该非流形边无法在不删除面的前提下拆分为流形片")
+
+    new_vertices = list(mesh.vertices)
+    new_faces = mesh.faces.copy()
+    added_vertices: list[int] = []
+    for fid in detached:
+        # copies are per-face: two same-direction faces must not end up
+        # sharing a fresh copy, or the edge stays non-manifold.
+        copies = {}
+        for orig in key:
+            copies[orig] = len(new_vertices)
+            new_vertices.append(mesh.vertices[orig].copy())
+            added_vertices.append(copies[orig])
+        row = new_faces[fid].copy()
+        for k in range(3):
+            if int(row[k]) in copies:
+                row[k] = copies[int(row[k])]
+        new_faces[fid] = row
+
+    rec = session._apply(
+        "split_nonmanifold_edge",
+        f"拆分非流形边 ({key[0]}, {key[1]})：{len(detached)} 个面分离",
+        {
+            "edge": list(key),
+            "incident_faces": incident,
+            "kept_faces": kept,
+            "detached_faces": detached,
+            "added_vertex_copies": added_vertices,
+            "confirm_reason": confirm_reason,
+        },
+        np.array(new_vertices, dtype=np.float64),
+        new_faces,
+        reason=reason or "非流形交汇：保留一个流形对，其余面分离",
+        affected_vertices=added_vertices,
+        affected_faces=detached,
+    )
+    return rec
+
+
+def split_all_nonmanifold_edges(
+    session: RepairSession,
+    *,
+    reason: str = "",
+    max_edges: int | None = None,
+) -> list[EditRecord]:
+    """Repeatedly split every edge with >=3 faces until none remain.
+
+    No face is deleted.  The loop is bounded so a pathological mesh fails
+    by raising :class:`RepairError` rather than spinning; the session is
+    left at the last successful split, and the caller can undo.
+    """
+    from .topology import build_edge_incidence
+
+    initial = len(build_edge_incidence(session.mesh.faces).nonmanifold_edges())
+    if initial == 0:
+        return []
+    limit = max_edges or (4 * initial + 8)
+    records: list[EditRecord] = []
+    guard = 0
+    while guard < limit:
+        guard += 1
+        inc = build_edge_incidence(session.mesh.faces)
+        nm = inc.nonmanifold_edges()
+        if len(nm) == 0:
+            return records
+        eid = int(nm[0])
+        u = int(inc.endpoints[eid, 0])
+        v = int(inc.endpoints[eid, 1])
+        records.append(split_nonmanifold_edge(session, u, v, reason=reason))
+    raise RepairError(
+        f"非流形边拆分未在 {limit} 步内收敛，已保留可撤销的中间状态"
+    )
+
+
+def split_nonmanifold_vertex_fans(
+    session: RepairSession,
+    vertex_ids: list[int],
+    *,
+    reason: str = "",
+) -> list[EditRecord]:
+    """Separate the disjoint face fans around a bow-tie vertex.
+
+    Two incident faces belong to the same fan only when they share a
+    manifold edge incident to the vertex (exactly two faces).  Each extra
+    fan gets its own copy of the vertex at the same coordinates; geometry
+    is unchanged and every triangle is kept.  This is the companion of
+    :func:`split_nonmanifold_edge`: an edge split alone leaves the shared
+    endpoints tying the sheets together, so the components never separate.
+    """
+    from .topology import build_edge_incidence, _DisjointSet
+
+    mesh = session.mesh
+    inc = build_edge_incidence(mesh.faces)
+    records: list[EditRecord] = []
+
+    for v in sorted(set(int(x) for x in vertex_ids)):
+        if v < 0 or v >= session.mesh.vertex_count:
+            raise RepairError(f"顶点 {v} 越界")
+        faces_now = session.mesh.faces
+        incident = [
+            fid for fid in range(session.mesh.face_count)
+            if v in (int(faces_now[fid, 0]), int(faces_now[fid, 1]),
+                     int(faces_now[fid, 2]))
+        ]
+        inc = build_edge_incidence(faces_now)
+        if len(incident) < 2:
+            continue
+        pos = {f: i for i, f in enumerate(incident)}
+        ds = _DisjointSet(len(incident))
+        for eid in range(len(inc.keys)):
+            fs = inc.faces[eid]
+            if len(fs) != 2:
+                continue
+            a, b = int(inc.endpoints[eid, 0]), int(inc.endpoints[eid, 1])
+            if v not in (a, b):
+                continue
+            f1, f2 = int(fs[0]), int(fs[1])
+            if f1 in pos and f2 in pos:
+                ds.union(pos[f1], pos[f2])
+        fans: dict[int, list[int]] = {}
+        for i, f in enumerate(incident):
+            fans.setdefault(ds.find(i), []).append(f)
+        if len(fans) < 2:
+            continue
+
+        ordered = sorted(fans.values(), key=lambda g: min(g))
+        faces = faces_now.copy()
+        copies: list[int] = []
+        detached_faces: list[int] = []
+        verts_added: list[int] = []
+        current = list(session.mesh.vertices)
+        for fan in ordered[1:]:
+            copy_id = len(current)
+            current.append(session.mesh.vertices[v].copy())
+            verts_added.append(copy_id)
+            for fid in fan:
+                row = faces[fid]
+                row[row == v] = copy_id
+                faces[fid] = row
+                detached_faces.append(int(fid))
+            copies.append(copy_id)
+        rec = session._apply(
+            "split_nonmanifold_vertex",
+            f"拆分非流形顶点 {v}：{len(ordered)} 个面扇分离",
+            {
+                "vertex": v,
+                "fans": [sorted(int(f) for f in fan) for fan in ordered],
+                "added_vertex_copies": copies,
+                "detached_faces": sorted(set(detached_faces)),
+                "confirm_reason": reason,
+            },
+            np.array(current, dtype=np.float64),
+            faces,
+            reason=reason or "非流形顶点：按面扇分离",
+            affected_vertices=verts_added,
+            affected_faces=sorted(set(detached_faces)),
+        )
+        records.append(rec)
+    return records
+
+
+def split_all_nonmanifold_vertices(
+    session: RepairSession,
+    *,
+    reason: str = "",
+    max_vertices: int | None = None,
+) -> list[EditRecord]:
+    from .topology import build_edge_incidence, find_nonmanifold_vertices
+
+    def bad_vertices():
+        inc = build_edge_incidence(session.mesh.faces)
+        return find_nonmanifold_vertices(session.mesh, inc)
+
+    bad = bad_vertices()
+    if not bad:
+        return []
+    limit = max_vertices or (len(bad) * 4 + 8)
+    records: list[EditRecord] = []
+    guard = 0
+    while guard < limit:
+        guard += 1
+        bad = bad_vertices()
+        if not bad:
+            return records
+        v = int(bad[0]["vertices"][0])
+        records.extend(split_nonmanifold_vertex_fans(session, [v], reason=reason))
+    raise RepairError(
+        f"非流形顶点拆分未在 {limit} 步内收敛，已保留可撤销的中间状态"
+    )
+
+
+def repair_nonmanifold_junctions(
+    session: RepairSession,
+    *,
+    reason: str = "",
+    max_passes: int = 16,
+) -> list[EditRecord]:
+    """Resolve both non-manifold edges and vertices, deleting no faces.
+
+    Vertex-fan splitting runs first because it often makes the offending
+    edge manifold at the same time (the sheets get independent endpoints).
+    Edge splitting then handles junctions whose faces still share an edge
+    but not a separable fan.  The two alternate until neither detector
+    fires, so the operation is idempotent on a clean mesh.
+    """
+    from .topology import build_edge_incidence, find_nonmanifold_vertices
+
+    def residue() -> tuple[int, int]:
+        inc = build_edge_incidence(session.mesh.faces)
+        return len(inc.nonmanifold_edges()), len(
+            find_nonmanifold_vertices(session.mesh, inc)
+        )
+
+    records: list[EditRecord] = []
+    for _ in range(max_passes):
+        before = residue()
+        if before == (0, 0):
+            return records
+        records.extend(split_all_nonmanifold_vertices(session, reason=reason))
+        records.extend(split_all_nonmanifold_edges(session, reason=reason))
+        if residue() == (0, 0):
+            return records
+    if residue() != (0, 0):
+        raise RepairError("非流形交汇在限定轮次内未完全拆分，已保留可撤销状态")
+    return records

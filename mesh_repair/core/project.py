@@ -44,6 +44,7 @@ class ProjectDocument:
         self.provenance_id = ""
         self.pending_confirmations: list[dict] = []
         self.last_verification: dict | None = None
+        self.last_repair_outcome: dict | None = None
         self.notes: list[str] = []
 
     # -- loading --------------------------------------------------------
@@ -93,6 +94,7 @@ class ProjectDocument:
         self.current = None
         self.baseline_fingerprints = {}
         self.last_verification = None
+        self.last_repair_outcome = None
         self.pending_confirmations.clear()
         self.notes.clear()
 
@@ -245,6 +247,7 @@ class ProjectDocument:
             "baseline_metrics": self.baseline.metrics if self.baseline else {},
             "current_metrics": self.current.metrics if self.current else {},
             "verification": self.last_verification,
+            "last_repair_outcome": self.last_repair_outcome,
             "origin_defect_check": self.check_origin_defects(),
             "notes": list(self.notes),
         }

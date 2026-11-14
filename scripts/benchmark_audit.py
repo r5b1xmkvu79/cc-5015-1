@@ -185,8 +185,14 @@ def run_combined():
     mesh, meta = gen.build("combined_stress")
     sess = repair.RepairSession(mesh, unit="mm")
     before = analyze_mesh(mesh)
+    h0 = _mesh_hash(sess.mesh)
     repair.remove_duplicate_faces(sess, before.groups["duplicate_faces"].instances)
     mid = analyze_mesh(sess.mesh)
+    # Non-manifold junctions left in the original sample are resolved with
+    # the same non-destructive kernel used by the strategy experiment.
+    junction_recs = repair.repair_nonmanifold_junctions(
+        sess, reason="audit: 非流形交汇保面拆分"
+    )
     conflict_faces = sorted({int(f) for inst in mid.groups.get("winding_conflicts", type("g", (), {"instances": []})()).instances
                              for f in inst["faces"]}) if "winding_conflicts" in mid.groups else []
     if conflict_faces:
@@ -196,24 +202,48 @@ def run_combined():
         repair.flip_component(sess, mid2.groups["inward_components"].instances[0]["faces"],
                               confirm_reason="audit")
     after = analyze_mesh(sess.mesh)
+    from mesh_repair.core.invariants import measure
+
+    inv_after = measure(sess.mesh)
     rep = verification_report(sess.original, before, sess.mesh, after)
     checks = {
         "duplicates_resolved": "duplicate_faces" not in after.groups,
         "winding_resolved": "winding_conflicts" not in after.groups,
         "inward_resolved": "inward_components" not in after.groups,
+        "nonmanifold_resolved": inv_after.nonmanifold_edges == 0
+                               and inv_after.nonmanifold_vertices == 0,
+        "faces_preserved": sess.mesh.face_count >= mesh.face_count
+                          - meta["expected"]["duplicate_faces"],
         "components_preserved": after.metrics["components"] == before.metrics["components"],
         "clean": rep["clean"],
+        "undo_restores_original": _undo_all_restores(sess, h0),
     }
     return {
         "benchmark": "combined_stress",
         "notes": meta["notes"],
         "detected": {k: len(v) for k, v in before.groups.items()},
         "after": {k: len(v) for k, v in after.groups.items()},
+        "junction_split_records": len(junction_recs),
         "checks": checks,
         "geometry": rep["geometry"],
         "problems": rep["problems"],
         "ok": all(checks.values()),
     }
+
+
+def _mesh_hash(mesh) -> str:
+    from mesh_repair.core.invariants import mesh_hash
+
+    return mesh_hash(mesh)
+
+
+def _undo_all_restores(sess, expected_hash: str) -> bool:
+    while sess.can_undo:
+        sess.undo()
+    ok = _mesh_hash(sess.mesh) == expected_hash
+    while sess.can_redo:
+        sess.redo()
+    return ok
 
 
 RUNNERS = [run_thin_wall, run_duplicate_faces, run_holed_plate,

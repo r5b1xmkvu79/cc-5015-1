@@ -103,6 +103,8 @@ class MainWindow(QMainWindow):
             ("相反方向组件", "mixed_orientation"),
             ("缺面开放盒", "open_shell"),
             ("综合压力样本", "combined_stress"),
+            ("多洞破损板", "multi_hole"),
+            ("非流形交汇（两盒共棱）", "nonmanifold_junction"),
         ]:
             act = QAction(label, self)
             act.triggered.connect(lambda _=False, n=name: self._load_benchmark(n))
@@ -171,10 +173,21 @@ class MainWindow(QMainWindow):
         self.verify_view = QPlainTextEdit()
         self.verify_view.setReadOnly(True)
 
+        # Before/after comparison produced by the repair kernel itself, not
+        # by the experiment text.  The user sees the mesh change and the
+        # defect's new location side by side with the invariant delta.
+        self.compare_view = QPlainTextEdit()
+        self.compare_view.setReadOnly(True)
+        self.compare_view.setPlaceholderText(
+            "选择画布中的坏面，点击“修复选中的坏面（内核驱动）”；\n"
+            "这里会显示修复前后的拓扑不变量、属性变化与问题位置。"
+        )
+
         self.settings_widget = self._build_settings()
 
         right = QTabWidget()
         right.addTab(hist_widget, "修复历史")
+        right.addTab(self.compare_view, "修复对照")
         right.addTab(self.detail_view, "详情")
         right.addTab(self.verify_view, "复核报告")
         right.addTab(self.settings_widget, "检测设置")
@@ -190,6 +203,8 @@ class MainWindow(QMainWindow):
         self.repair_panel.changed.connect(self._status)
         self.repair_panel.requestRepaint.connect(self._refresh_viewport)
         self.repair_panel.requestRefreshAnalysis.connect(self._after_repair)
+        self.repair_panel.repairApplied.connect(self._on_repair_applied)
+        self.repair_panel.repairFailed.connect(self._on_repair_failed)
         self.repair_panel.headless_auto_confirm = self.headless_auto_confirm
 
     def _build_settings(self) -> QWidget:
@@ -346,6 +361,39 @@ class MainWindow(QMainWindow):
         self.doc.reanalyze()
         self._refresh_all()
         self._status("修复已应用；请运行“复核修复结果”以确认拓扑与属性")
+
+    def _on_repair_applied(self, outcome) -> None:
+        """Show the kernel's own before/after and locate the changed region."""
+        self.doc.last_repair_outcome = outcome.to_dict()
+        self._after_repair()
+        self.compare_view.setPlainText(_format_outcome(outcome, self.doc.settings.unit))
+        self.right_tabs.setCurrentWidget(self.compare_view)
+        # Highlight exactly what the kernel says changed, on the live mesh.
+        faces = [f for f in outcome.focus_faces
+                 if f < self.doc.session.mesh.face_count]
+        self.viewport.set_face_selection(faces)
+        self.viewport.set_defect_highlight(faces, outcome.focus_vertices)
+        self.viewport.set_highlight_loops(outcome.focus_loops)
+        self._loop_selection = outcome.focus_loops[0] if outcome.focus_loops else None
+        self.repair_panel.set_selection(
+            faces, outcome.focus_vertices, self._loop_selection
+        )
+        self.viewport.update()
+        self._status(outcome.message)
+
+    def _on_repair_failed(self, message: str) -> None:
+        """Failure feedback returns to the repair panel, not just the status bar."""
+        self.doc.last_repair_outcome = {
+            "applied": False,
+            "message": message,
+            "mesh_changed": False,
+        }
+        self.compare_view.setPlainText(
+            "== 修复未执行 ==\n\n" + message
+            + "\n\n网格与历史均未改动（内核在写入前校验，失败时哈希不变）。"
+        )
+        self.right_tabs.setCurrentWidget(self.compare_view)
+        self._status("修复失败：" + message)
 
     def _refresh_all(self) -> None:
         session = self.doc.session
@@ -658,6 +706,43 @@ class MainWindow(QMainWindow):
             if ans == QMessageBox.Save:
                 self._export_audit()
         event.accept()
+
+
+def _format_outcome(outcome, unit: str) -> str:
+    lines = ["== 修复对照（内核测量）==", ""]
+    lines.append(f"缺陷: {outcome.kind} #{outcome.index}")
+    lines.append(f"操作: {outcome.op}")
+    lines.append(f"结果: {outcome.message}")
+    lines.append(f"网格哈希: {outcome.hash_before[:12]} -> {outcome.hash_after[:12]}"
+                 + ("（已改变）" if outcome.mesh_changed else "（未改变）"))
+    d = outcome.delta or {}
+    lines.append("")
+    lines.append("—— 拓扑不变量 ——")
+    for k in ("vertices", "edges", "faces", "components", "boundary_edges",
+              "boundary_loops", "nonmanifold_edges", "nonmanifold_vertices",
+              "euler_characteristic", "total_genus"):
+        if k in d:
+            v = d[k]
+            lines.append(f"{k:22s} {v['before']:>6} -> {v['after']:>6}  (Δ {v['delta']:+})")
+    lines.append("")
+    lines.append("—— 属性变化 ——")
+    for k in ("area", "signed_volume"):
+        if k in d:
+            v = d[k]
+            lines.append(f"{k:22s} {v['before']:.6g} -> {v['after']:.6g}  (Δ {v['delta']:+.6g})")
+    a = outcome.attributes or {}
+    if a:
+        lines.append(f"{'保留面(坐标键)':18s} {a['preserved_face_keys']}  "
+                     f"删除 {a['removed_face_keys']}  新增 {a['added_face_keys']}")
+    lines.append("")
+    lines.append("—— 问题位置（画布已高亮）——")
+    lines.append(f"关注面: {len(outcome.focus_faces)} 个  {outcome.focus_faces[:12]}"
+                 + (" …" if len(outcome.focus_faces) > 12 else ""))
+    if outcome.focus_vertices:
+        lines.append(f"关注顶点: {len(outcome.focus_vertices)} 个")
+    if outcome.focus_loops:
+        lines.append(f"关注开口环: {outcome.focus_loops[0]}")
+    return "\n".join(lines)
 
 
 def np_str(v) -> str:

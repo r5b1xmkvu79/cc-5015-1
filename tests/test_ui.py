@@ -276,6 +276,101 @@ class TestUIFlow(unittest.TestCase):
         self.assertIn("orientation_unresolved",
                       self.win.defect_panel.warn_box.toPlainText())
 
+    def test_pick_bad_face_repair_shows_before_after(self):
+        """Select a non-manifold face on the canvas, repair via the kernel,
+        and assert the viewport + comparison tab change, not just text."""
+        self.win._load_benchmark("nonmanifold_junction")
+        self._pump()
+        sess = self.win.doc.session
+        result = self.win.doc.current
+        inst = result.groups["nonmanifold_edges"].instances[0]
+        faces = [int(f) for f in inst["faces"]][:2]
+        faces_before = sess.mesh.face_count
+        components_before = sess.mesh and _components(sess.mesh)
+
+        # emulate a canvas pick: select those faces and sync the panel
+        self.win.viewport.selected_faces = set(faces)
+        self.win.repair_panel.set_selection(faces, set(), None)
+        self.win.repair_panel._repair_picked_face()
+        self._pump()
+
+        self.assertGreater(len(sess.history), 0, "kernel repair must be recorded")
+        self.assertEqual(sess.mesh.face_count, faces_before, "no face deleted")
+        self.assertGreater(_components(sess.mesh), components_before,
+                           "junction must separate into more components")
+        # the comparison tab is populated from the kernel outcome
+        text = self.win.compare_view.toPlainText()
+        self.assertIn("修复对照", text)
+        self.assertIn("拓扑不变量", text)
+        self.assertIn("保留面", text)
+        # and the canvas highlights the changed region
+        self.assertTrue(self.win.viewport.selected_faces)
+        # verify pass sees the non-manifold edge resolved
+        self.win._verify()
+        self._pump()
+        self.assertEqual(self.win.doc.current.metrics["nonmanifold_edges"], 0)
+
+    def test_failed_repair_feedback_returns_to_panel(self):
+        self.win._load_benchmark("multi_hole")
+        self._pump()
+        self.win.set_headless_auto_confirm(True)
+        sess = self.win.doc.session
+        result = self.win.doc.current
+        # pick the largest (over-limit) opening
+        group = result.groups["open_boundaries"]
+        idx = max(range(len(group.instances)),
+                  key=lambda i: group.instances[i]["perimeter"])
+        faces_before = sess.mesh.face_count
+        h_before = _hash(sess.mesh)
+        # Kernel path must refuse this loop and report failure to the panel.
+        from mesh_repair.core import production
+        from mesh_repair.core.repair import RepairError
+
+        with self.assertRaises(RepairError):
+            production.apply_to_instance(sess, "open_boundaries", idx,
+                                         reason="over limit")
+        self.assertEqual(sess.mesh.face_count, faces_before)
+        self.assertEqual(_hash(sess.mesh), h_before)
+        self.assertEqual(len(sess.history), 0)
+        # Feed that failure through the window's feedback path.
+        self.win._on_repair_failed("开口超限，已拒绝")
+        self._pump()
+        self.assertIn("修复未执行", self.win.compare_view.toPlainText())
+        # A stale canvas selection that maps to no defect also reports failure.
+        self.win.viewport.selected_faces = {0}
+        self.win.repair_panel.set_selection({0}, set(), None)
+        self.win.repair_panel._repair_picked_face()
+        self._pump()
+        self.assertTrue(self.win.repair_panel.last_error)
+        self.assertEqual(_hash(sess.mesh), h_before)
+
+    def test_viewport_reports_added_faces_after_repair(self):
+        self.win._load_benchmark("multi_hole")
+        self._pump()
+        self.win.set_headless_auto_confirm(True)
+        result = self.win.doc.current
+        group = result.groups["open_boundaries"]
+        idx = min(range(len(group.instances)),
+                  key=lambda i: group.instances[i]["perimeter"])
+        self.win._focus_defect("open_boundaries", idx)
+        self._pump()
+        self.win.repair_panel._fill_hole()
+        self._pump()
+        self.assertTrue(self.win.viewport.added_faces)
+        self.assertTrue(self.win.doc.session.history[-1].added_faces)
+
+
+def _components(mesh) -> int:
+    from mesh_repair.core.topology import face_components
+
+    return face_components(mesh.faces, mesh.vertex_count)[1]
+
+
+def _hash(mesh) -> str:
+    from mesh_repair.core.invariants import mesh_hash
+
+    return mesh_hash(mesh)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

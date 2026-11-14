@@ -19,8 +19,8 @@
 |---|---|---|
 | 退化面 | 零面积、重复索引、极狭长 | 删除选中面 |
 | 重复面 | 相同顶点三元组（同向/反向） | 删多余面，保留面写入记录 |
-| 非流形边 | ≥3 面共享一条边 | 仅定位，不自动拆分 |
-| 非流形顶点 | 面扇不连通的蝴蝶结顶点 | 仅定位 |
+| 非流形边 | ≥3 面共享一条边 | 按面扇/边拆分，保面不删（需选中实例） |
+| 非流形顶点 | 面扇不连通的蝴蝶结顶点 | 按面扇复制顶点分离（需选中实例） |
 | 绕向冲突 | 共享边被同向使用 | 翻转冲突面（需确认） |
 | 整体朝内组件 | 封闭组件体积为负 | 整体翻转（需确认） |
 | 重合/邻近顶点 | 位置在阈值内 | **仅报告**，焊接需人工确认 |
@@ -48,6 +48,47 @@
 
 `文件 → 导出修复结果` 同时写出网格、审计 JSON 与旁件。
 
+## 两种修复路线（策略实验）
+
+仓库内同时实现了两条缺陷处理路线，供对照而不是二选一：
+
+| 路线 | 做法 | 典型取舍 |
+|---|---|---|
+| 直接改局部连接（`local_connections`） | 每个缺陷就地最小改动；能补的洞先补 | 可交付部分结果，超限洞保留 |
+| 先建有效拓扑再修补（`topology_first`） | 先拆非流形交汇并清点全部环，再统一修补 | 有一个环超限就整体不落地 |
+
+两条路线共用同一非流形拆分内核（按面扇复制顶点 + 拆边，**不删除任何非冗余面**）。
+实验入口：
+
+```bash
+python3 scripts/strategy_experiment.py
+```
+
+它把多洞与非流形交汇两个基准的拓扑不变量与属性变化复算到
+`artifacts/strategy_experiment.json` / `.md`，并附
+`artifacts/strategy_experiment_notes.md` 记录结论、处理边界与**单列的待验假设**。
+不变量与属性变化都由 `mesh_repair/core/invariants.py` 的代码计算，文档不手填数字。
+
+## 图形入口与生产接点
+
+修复内核通过 `mesh_repair/core/production.py` 接到视窗：
+
+- 画布中选中坏面 → 左栏「修复」→ **修复选中的坏面（内核驱动）**。
+- 右栏新增 **「修复对照」** 页，显示该次修复的网格哈希、拓扑不变量前后差值、
+  面积/体积变化、保留/删除/新增面（坐标键计数），以及画布上高亮的“问题位置”。
+- 失败（超限、选错面、过期索引）不会静默：错误文本回到修复面板与对照页，
+  并校验网格哈希未变。
+- 命令行仅作辅助：`scripts/strategy_experiment.py` 复算实验，
+  `scripts/window_drive.py` 在离屏环境驱动真实窗口并截取前后对照
+  （`artifacts/strategy/20_pick_before.png`、`21_pick_after.png`、
+  `window_run.json` 记录组件数 1→2、面数 24→24）。
+
+快速验证：
+
+```bash
+LD_LIBRARY_PATH=... QT_QPA_PLATFORM=offscreen python3 scripts/window_drive.py
+```
+
 ## 基准件
 
 菜单「基准」可现场生成，也可导出为 STL（`artifacts/benchmarks/`）：
@@ -60,6 +101,8 @@
 | `mixed_orientation` | 朝外盒 + 整体朝内盒 | 识别朝内组件；翻转后体积增大、另一组件不受影响 |
 | `open_shell` | 缺顶面的盒 | 开放边界被检出；朝向标记为待确认，不自动补 |
 | `combined_stress` | 薄壁 + 重复面 + 反向面 + 朝内组件 | 全链路修复后复核干净、组件数不变 |
+| `multi_hole` | 4 处小破损 + 2 处超限破损 | 路线 A 补小洞、拒大洞；路线 B 整体不落地 |
+| `nonmanifold_junction` | 两封闭盒仅沿一条棱相交 | 拆分保面、保面积/体积，组件 1→2 |
 
 ## 测试与核对
 
@@ -81,17 +124,22 @@ python3 scripts/benchmark_audit.py
 
 ```
 mesh_repair/
-  core/        units, mesh, topology, spatial, repair, holes, verify, io_mesh, project
+  core/        units, mesh, topology, spatial, repair, holes, verify, io_mesh, project,
+               invariants（不变量与属性复算）, strategies（两条路线）, production（生产接点）
   ui/          viewport (QPainter 软件渲染), panels (缺陷/修复), main_window
-  benchmarks/  六类基准生成器
+  benchmarks/  八类基准生成器
 scripts/
-  run.sh            启动脚本（自动配置 Qt 图形库与离屏平台）
-  benchmark_audit.py 基准核对与报告
+  run.sh                启动脚本（自动配置 Qt 图形库与离屏平台）
+  benchmark_audit.py    基准核对与报告
+  strategy_experiment.py 两条路线实验与可复算数据
+  window_drive.py       离屏驱动真实窗口：选坏面→内核修复→前后截图
 tests/
-  test_core.py  几何与流程测试
-  test_ui.py    离屏 Qt 交互测试
+  test_core.py       几何与流程测试
+  test_strategies.py 不变量、两条路线、非流形拆分、生产接点
+  test_ui.py         离屏 Qt 交互测试（含选坏面→修复→对照）
 artifacts/
   benchmarks/   生成的基准 STL
+  strategy/     策略实验数据、说明与图形入口前后截图
   *.png         界面/修复前后截图
 ```
 
@@ -99,5 +147,6 @@ artifacts/
 
 - 渲染为软件光栅（画家算法），用于定位而非精确遮挡；超大面数时交互会变慢。
 - 补洞使用耳切法，仅接受近平面、简单多边形边界；曲面开口会被平面偏差上限拒绝。
-- 非流形边与非流形顶点只检测不自动拆分——无法可靠推断拆分方式时交由人工。
+- 非流形边/顶点可按面扇与边拆分（保面、不改坐标），但拆分只改连通性：可能引入重合顶点，默认按“待确认”处理，不自动焊接。
+- 策略实验中的“全有全无”路线在超大网格上会放大“什么都不做”的代价；阈值未校准，见 `artifacts/strategy_experiment_notes.md` 的待验假设。
 - 单位不来自 STL/OBJ/PLY 文件本身，需在界面中选择；阈值按物理长度换算后参与判定。

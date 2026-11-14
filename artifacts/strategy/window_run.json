@@ -1,0 +1,20 @@
+{
+  "benchmark": "nonmanifold_junction",
+  "selected_faces": [
+    6,
+    9
+  ],
+  "faces_before": 24,
+  "faces_after": 24,
+  "components_before": 1,
+  "components_after": 2,
+  "history": [
+    "拆分非流形顶点 2：2 个面扇分离",
+    "拆分非流形顶点 6：2 个面扇分离"
+  ],
+  "compare_tab": "== 修复对照（内核测量）==\n\n缺陷: nonmanifold_edges #0\n操作: split_nonmanifold_edge\n结果: 拆分非流形交汇 2 步；无面被删除\n网格哈希: eaabcb5e39eb -> dfa8915fe8d8（已改变）\n\n—— 拓扑不变量 ——\nvertices                   14 ->     16  (Δ +2)\nedges                      35 ->     36  (Δ +1)\nfaces                      24 ->     24  (Δ +0)\ncomponents                  1 ->      2  (Δ +1)\nboundary_edges              0 ->      0  (Δ +0)\nboundary_loops              0 ->      0  (Δ +0)\nnonmanifold_edges           1 ->      0  (Δ -1)\nnonmanifold_vertices        2 ->      0  (Δ -2)\neuler_characteristic        3 ->      4  (Δ +1)\ntotal_genus                 0 ->      0  (Δ +0)\n\n—— 属性变化 ——\narea                   1200 -> 1200  (Δ +0)\nsigned_volume          2000 -> 2000  (Δ +0)\n保留面(坐标键)           24  删除 0  新增 0\n\n—— 问题位置（画布已高亮）——\n关注面: 12 个  [0, 3, 6, 7, 8, 9, 13, 14, 16, 17, 22, 23]\n关注顶点: 2 个",
+  "screenshots": [
+    "20_pick_before.png",
+    "21_pick_after.png"
+  ]
+}

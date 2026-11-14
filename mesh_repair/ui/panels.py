@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core import holes, repair
+from ..core import holes, production, repair
 from ..core.repair import RepairError, RepairSession
 from ..core.topology import AnalysisResult
 from ..core.units import format_mm, to_mm
@@ -288,6 +288,8 @@ class RepairPanel(QWidget):
     changed = Signal(str)          # human readable status
     requestRepaint = Signal()
     requestRefreshAnalysis = Signal()
+    repairApplied = Signal(object)  # RepairOutcome, for before/after display
+    repairFailed = Signal(str)      # failure text, fed back to the panel
 
     def __init__(self, defect_panel: DefectPanel, parent=None):
         super().__init__(parent)
@@ -306,13 +308,19 @@ class RepairPanel(QWidget):
 
         face_box = QGroupBox("面操作（需选择）")
         fv = QVBoxLayout(face_box)
+        self.btn_repair_pick = QPushButton("修复选中的坏面（内核驱动）")
+        self.btn_repair_pick.setToolTip(
+            "按画布中选中的面定位缺陷实例，调用修复内核；"
+            "前后拓扑不变量与属性变化会显示在右侧"
+        )
         self.btn_del = QPushButton("删除选中面")
         self.btn_del.setToolTip("仅删除画布中明确选中的面")
         self.btn_flip = QPushButton("翻转选中面绕向")
         self.btn_fix_winding = QPushButton("按检测结果翻转绕向冲突面")
         self.btn_del_dupes = QPushButton("删除选中重复面组")
         self.btn_flip_comp = QPushButton("翻转选中的整体朝内组件…")
-        for b in (self.btn_del, self.btn_flip, self.btn_fix_winding, self.btn_del_dupes, self.btn_flip_comp):
+        for b in (self.btn_repair_pick, self.btn_del, self.btn_flip,
+                  self.btn_fix_winding, self.btn_del_dupes, self.btn_flip_comp):
             fv.addWidget(b)
         layout.addWidget(face_box)
 
@@ -375,6 +383,7 @@ class RepairPanel(QWidget):
 
         layout.addStretch(1)
 
+        self.btn_repair_pick.clicked.connect(self._repair_picked_face)
         self.btn_del.clicked.connect(self._delete_faces)
         self.btn_flip.clicked.connect(self._flip_faces)
         self.btn_fix_winding.clicked.connect(self._fix_winding)
@@ -397,8 +406,9 @@ class RepairPanel(QWidget):
         self._set_enabled(session is not None)
 
     def _set_enabled(self, on: bool) -> None:
-        for b in (self.btn_del, self.btn_flip, self.btn_fix_winding, self.btn_del_dupes,
-                  self.btn_flip_comp, self.btn_weld, self.btn_drop_iso, self.btn_check_loop,
+        for b in (self.btn_repair_pick, self.btn_del, self.btn_flip,
+                  self.btn_fix_winding, self.btn_del_dupes, self.btn_flip_comp,
+                  self.btn_weld, self.btn_drop_iso, self.btn_check_loop,
                   self.btn_fill, self.btn_compact):
             b.setEnabled(on)
 
@@ -449,6 +459,44 @@ class RepairPanel(QWidget):
         self.requestRefreshAnalysis.emit()
 
     # -- face ops -------------------------------------------------------
+    def _repair_picked_face(self) -> None:
+        """Pick bad faces on the canvas, repair via the shared kernel."""
+        if not self._selected_faces:
+            self._fail("请先在画布中选择要修复的坏面")
+            return
+        if self._result is None or self.session is None:
+            self._fail("尚无检测结果，请先检测")
+            return
+        found = production.find_defect_for_faces(self._result, self._selected_faces)
+        if found is None:
+            self._fail(
+                "选中的面不属于任何可自动修复的缺陷实例。\n"
+                "请用缺陷列表定位，或确认所选面确实属于重复/退化/绕向/非流形缺陷。"
+            )
+            return
+        kind, idx = found
+        if kind in ("inward_components", "duplicate_vertices", "open_boundaries"):
+            ok, reason = self._confirm(
+                "确认修复",
+                f"选中的面属于“{kind}”实例 #{idx}。\n"
+                "该操作会改变连通性或几何，请确认选择范围与参数正确。",
+            )
+            if not ok:
+                return
+        else:
+            reason = f"按画布选中面修复 {kind}#{idx}"
+        try:
+            outcome = production.apply_to_instance(
+                self.session, kind, idx, reason=reason, limits=self._limits()
+            )
+        except RepairError as exc:
+            self.last_error = str(exc)
+            self.repairFailed.emit(str(exc))
+            self._fail(str(exc))
+            return
+        self.repairApplied.emit(outcome)
+        self._done(outcome.message + "；前后变化已显示在“修复对照”")
+
     def _delete_faces(self) -> None:
         if not self._selected_faces:
             self._fail("请先在画布中选择要删除的面")
